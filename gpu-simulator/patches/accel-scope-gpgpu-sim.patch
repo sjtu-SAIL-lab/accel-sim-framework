@@ -1,0 +1,1145 @@
+diff --git a/libcuda/cuda_runtime_api.cc b/libcuda/cuda_runtime_api.cc
+index b64c3d9..675baf1 100644
+--- a/libcuda/cuda_runtime_api.cc
++++ b/libcuda/cuda_runtime_api.cc
+@@ -1870,6 +1870,7 @@ __host__ cudaError_t CUDARTAPI cudaBindTextureInternal(
+     size_t *offset, const struct textureReference *texref, const void *devPtr,
+     const struct cudaChannelFormatDesc *desc, size_t size __dv(UINT_MAX),
+     gpgpu_context *gpgpu_ctx = NULL) {
++#if CUDART_VERSION < 12000
+   gpgpu_context *ctx;
+   if (gpgpu_ctx) {
+     ctx = gpgpu_ctx;
+@@ -1906,12 +1907,14 @@ __host__ cudaError_t CUDARTAPI cudaBindTextureInternal(
+   gpu->gpgpu_ptx_sim_bindTextureToArray(texref, array);
+   devPtr = (void *)(long long)array->devPtr32;
+   printf("GPGPU-Sim PTX: devPtr = %p\n", devPtr);
++#endif
+   return g_last_cudaError = cudaSuccess;
+ }
+ 
+ __host__ cudaError_t CUDARTAPI cudaBindTextureToArrayInternal(
+     const struct textureReference *texref, const struct cudaArray *array,
+     const struct cudaChannelFormatDesc *desc, gpgpu_context *gpgpu_ctx = NULL) {
++#if CUDART_VERSION < 12000
+   gpgpu_context *ctx;
+   if (gpgpu_ctx) {
+     ctx = gpgpu_ctx;
+@@ -1929,11 +1932,13 @@ __host__ cudaError_t CUDARTAPI cudaBindTextureToArrayInternal(
+          gpu->gpgpu_ptx_sim_findNamefromTexture(texref));
+   printf("GPGPU-Sim PTX:   Texture Normalized? = %d\n", texref->normalized);
+   gpu->gpgpu_ptx_sim_bindTextureToArray(texref, array);
++#endif
+   return g_last_cudaError = cudaSuccess;
+ }
+ 
+ __host__ cudaError_t CUDARTAPI cudaUnbindTextureInternal(
+     const struct textureReference *texref, gpgpu_context *gpgpu_ctx = NULL) {
++#if CUDART_VERSION < 12000
+   gpgpu_context *ctx;
+   if (gpgpu_ctx) {
+     ctx = gpgpu_ctx;
+@@ -1953,6 +1958,7 @@ __host__ cudaError_t CUDARTAPI cudaUnbindTextureInternal(
+          gpu->gpgpu_ptx_sim_findNamefromTexture(texref));
+ 
+   gpu->gpgpu_ptx_sim_unbindTexture(texref);
++#endif
+   return g_last_cudaError = cudaSuccess;
+ }
+ 
+diff --git a/setup_environment b/setup_environment
+index 871bb59..5e2c673 100644
+--- a/setup_environment
++++ b/setup_environment
+@@ -44,11 +44,11 @@ if [ $? = 1 ]; then
+ 	return 1;
+ fi
+ 
+-CC_VERSION=`gcc --version | head -1 | awk '{for(i=1;i<=NF;i++){ if(match($i,/^[0-9]\.[0-9]\.[0-9]$/))  {print $i; exit 0}}}'`
++CC_VERSION=`gcc -dumpfullversion -dumpversion`
+ 
+ CUDA_VERSION_STRING=`$CUDA_INSTALL_PATH/bin/nvcc --version | awk '/release/ {print $5;}' | sed 's/,//'`;
+ export CUDA_VERSION_NUMBER=`echo $CUDA_VERSION_STRING | sed 's/\./ /' | awk '{printf("%02u%02u", 10*int($1), 10*$2);}'`
+-if [ $CUDA_VERSION_NUMBER -gt 11100 -o $CUDA_VERSION_NUMBER -lt 2030  ]; then
++if [ $CUDA_VERSION_NUMBER -gt 12999 -o $CUDA_VERSION_NUMBER -lt 2030  ]; then
+ 	echo "ERROR ** GPGPU-Sim version $GPGPUSIM_VERSION_STRING not tested with CUDA version $CUDA_VERSION_STRING (please see README)";
+ 	echo $CUDA_VERSION_NUMBER
+     return 1;
+diff --git a/src/abstract_hardware_model.h b/src/abstract_hardware_model.h
+index 63d4b32..81339c8 100644
+--- a/src/abstract_hardware_model.h
++++ b/src/abstract_hardware_model.h
+@@ -770,8 +770,9 @@ typedef std::bitset<SECTOR_CHUNCK_SIZE> mem_access_sector_mask_t;
+   MA_TUP_BEGIN(mem_access_type)                                         \
+   MA_TUP(GLOBAL_ACC_R), MA_TUP(LOCAL_ACC_R), MA_TUP(CONST_ACC_R),       \
+       MA_TUP(TEXTURE_ACC_R), MA_TUP(GLOBAL_ACC_W), MA_TUP(LOCAL_ACC_W), \
+-      MA_TUP(L1_WRBK_ACC), MA_TUP(L2_WRBK_ACC), MA_TUP(INST_ACC_R),     \
+-      MA_TUP(L1_WR_ALLOC_R), MA_TUP(L2_WR_ALLOC_R),                     \
++      MA_TUP(L1_WRBK_ACC), MA_TUP(L2_WRBK_ACC), MA_TUP(L3_WRBK_ACC),   \
++      MA_TUP(INST_ACC_R), MA_TUP(L1_WR_ALLOC_R),                        \
++      MA_TUP(L2_WR_ALLOC_R), MA_TUP(L3_WR_ALLOC_R),                     \
+       MA_TUP(NUM_MEM_ACCESS_TYPE) MA_TUP_END(mem_access_type)
+ 
+ #define MA_TUP_BEGIN(X) enum X {
+@@ -866,6 +867,9 @@ class mem_access_t {
+       case L2_WRBK_ACC:
+         fprintf(fp, "L2_WRBK ");
+         break;
++      case L3_WRBK_ACC:
++        fprintf(fp, "L3_WRBK ");
++        break;
+       case INST_ACC_R:
+         fprintf(fp, "INST    ");
+         break;
+diff --git a/src/cuda-sim/cuda-sim.cc b/src/cuda-sim/cuda-sim.cc
+index 833d33f..db40cbe 100644
+--- a/src/cuda-sim/cuda-sim.cc
++++ b/src/cuda-sim/cuda-sim.cc
+@@ -125,6 +125,7 @@ cudaLaunchDeviceV2_init_perWarp, cudaLaunchDevicV2_perKernel>"
+ void gpgpu_t::gpgpu_ptx_sim_bindNameToTexture(
+     const char *name, const struct textureReference *texref, int dim,
+     int readmode, int ext) {
++#if CUDART_VERSION < 12000
+   std::string texname(name);
+   if (m_NameToTextureRef.find(texname) == m_NameToTextureRef.end()) {
+     m_NameToTextureRef[texname] = std::set<const struct textureReference *>();
+@@ -148,6 +149,7 @@ void gpgpu_t::gpgpu_ptx_sim_bindNameToTexture(
+   const textureReferenceAttr *texAttr = new textureReferenceAttr(
+       texref, dim, (enum cudaTextureReadMode)readmode, ext);
+   m_NameToAttribute[texname] = texAttr;
++#endif
+ }
+ 
+ const char *gpgpu_t::gpgpu_ptx_sim_findNamefromTexture(
+@@ -185,6 +187,7 @@ unsigned int intLOGB2(unsigned int v) {
+ 
+ void gpgpu_t::gpgpu_ptx_sim_bindTextureToArray(
+     const struct textureReference *texref, const struct cudaArray *array) {
++#if CUDART_VERSION < 12000
+   std::string texname = gpgpu_ptx_sim_findNamefromTexture(texref);
+ 
+   std::map<std::string, const struct cudaArray *>::const_iterator t =
+@@ -258,14 +261,17 @@ void gpgpu_t::gpgpu_ptx_sim_bindTextureToArray(
+   texInfo->texel_size = texel_size;
+   texInfo->texel_size_numbits = intLOGB2(texel_size);
+   m_NameToTextureInfo[texname] = texInfo;
++#endif
+ }
+ 
+ void gpgpu_t::gpgpu_ptx_sim_unbindTexture(
+     const struct textureReference *texref) {
++#if CUDART_VERSION < 12000
+   // assumes bind-use-unbind-bind-use-unbind pattern
+   std::string texname = gpgpu_ptx_sim_findNamefromTexture(texref);
+   m_NameToCudaArray.erase(texname);
+   m_NameToTextureInfo.erase(texname);
++#endif
+ }
+ 
+ #define MAX_INST_SIZE 8 /*bytes*/
+diff --git a/src/cuda-sim/instructions.cc b/src/cuda-sim/instructions.cc
+index 2314bef..aabb679 100644
+--- a/src/cuda-sim/instructions.cc
++++ b/src/cuda-sim/instructions.cc
+@@ -6046,6 +6046,10 @@ void textureNormalizeOutput(const struct cudaChannelFormatDesc &desc,
+ }
+ 
+ void tex_impl(const ptx_instruction *pI, ptx_thread_info *thread) {
++#if CUDART_VERSION >= 12000
++  inst_not_implemented(pI);
++  return;
++#else
+   unsigned dimension = pI->dimension();
+   const operand_info &dst =
+       pI->dst();  // the registers to which fetched texel will be placed
+@@ -6362,6 +6366,7 @@ void tex_impl(const ptx_instruction *pI, ptx_thread_info *thread) {
+   }
+ 
+   thread->set_vector_operand_values(dst, data1, data2, data3, data4);
++#endif
+ }
+ 
+ void txq_impl(const ptx_instruction *pI, ptx_thread_info *thread) {
+diff --git a/src/gpgpu-sim/dram.cc b/src/gpgpu-sim/dram.cc
+index c36cf08..489fdd7 100644
+--- a/src/gpgpu-sim/dram.cc
++++ b/src/gpgpu-sim/dram.cc
+@@ -312,7 +312,8 @@ void dram_t::cycle() {
+         data->set_status(IN_PARTITION_MC_RETURNQ,
+                          m_gpu->gpu_sim_cycle + m_gpu->gpu_tot_sim_cycle);
+         if (data->get_access_type() != L1_WRBK_ACC &&
+-            data->get_access_type() != L2_WRBK_ACC) {
++            data->get_access_type() != L2_WRBK_ACC &&
++            data->get_access_type() != L3_WRBK_ACC) {
+           data->set_reply();
+           returnq->push(data);
+         } else {
+@@ -584,7 +585,8 @@ bool dram_t::issue_col_command(int j) {
+       bk[j]->RTPc = m_config->BL / m_config->data_command_freq_ratio;
+       bkgrp[grp]->RTPLc = m_config->tRTPL;
+       issued = true;
+-      if (bk[j]->mrq->data->get_access_type() == L2_WR_ALLOC_R)
++      if (bk[j]->mrq->data->get_access_type() == L2_WR_ALLOC_R ||
++          bk[j]->mrq->data->get_access_type() == L3_WR_ALLOC_R)
+         n_rd_L2_A++;
+       else
+         n_rd++;
+@@ -620,7 +622,8 @@ bool dram_t::issue_col_command(int j) {
+         bk[j]->WTPc = m_config->tWTP;
+         issued = true;
+ 
+-        if (bk[j]->mrq->data->get_access_type() == L2_WRBK_ACC)
++        if (bk[j]->mrq->data->get_access_type() == L2_WRBK_ACC ||
++            bk[j]->mrq->data->get_access_type() == L3_WRBK_ACC)
+           n_wr_WB++;
+         else
+           n_wr++;
+@@ -899,4 +902,4 @@ bool dram_t::isempty() const
+   {
+     if (!rwq->empty() || !mrqq->empty() || !returnq->empty()) return false;
+     return true;
+-  }
+\ No newline at end of file
++  }
+diff --git a/src/gpgpu-sim/gpu-cache.cc b/src/gpgpu-sim/gpu-cache.cc
+index 3fe5345..c354736 100644
+--- a/src/gpgpu-sim/gpu-cache.cc
++++ b/src/gpgpu-sim/gpu-cache.cc
+@@ -169,6 +169,12 @@ unsigned l2_cache_config::set_index(new_addr_type addr) const {
+   return cache_config::set_index(part_addr);
+ }
+ 
++unsigned l3_cache_config::set_index(new_addr_type addr) const {
++  new_addr_type part_addr = addr;
++  if (m_address_mapping) part_addr = m_address_mapping->partition_address(addr);
++  return (part_addr / m_line_sz) % m_nset;
++}
++
+ tag_array::~tag_array() {
+   unsigned cache_lines_num = m_config.get_max_num_lines();
+   for (unsigned i = 0; i < cache_lines_num; ++i) delete m_lines[i];
+diff --git a/src/gpgpu-sim/gpu-cache.h b/src/gpgpu-sim/gpu-cache.h
+index 0897a08..7eb0aac 100644
+--- a/src/gpgpu-sim/gpu-cache.h
++++ b/src/gpgpu-sim/gpu-cache.h
+@@ -936,6 +936,12 @@ class l2_cache_config : public cache_config {
+   
+ };
+ 
++class l3_cache_config : public l2_cache_config {
++ public:
++  l3_cache_config() : l2_cache_config() {}
++  virtual unsigned set_index(new_addr_type addr) const;
++};
++
+ class tag_array {
+  public:
+   // Use this constructor
+@@ -1724,6 +1730,25 @@ class l2_cache : public data_cache {
+   std::unordered_set<new_addr_type> m_pending_misses;
+ };
+ 
++/// Accel-SCOPE shared last-level cache. It reuses the data-cache behavior but
++/// has distinct write-allocation/writeback access types for correct accounting.
++class l3_cache : public data_cache {
++ public:
++  l3_cache(const char *name, cache_config &config, int core_id, int type_id,
++           mem_fetch_interface *memport, mem_fetch_allocator *mfcreator,
++           enum mem_fetch_status status, class gpgpu_sim *gpu)
++      : data_cache(name, config, core_id, type_id, memport, mfcreator, status,
++                   L3_WR_ALLOC_R, L3_WRBK_ACC, gpu) {}
++
++  virtual ~l3_cache() {}
++  bool isempty() { return m_miss_queue.empty(); }
++  virtual enum cache_request_status access(new_addr_type addr, mem_fetch *mf,
++                                           unsigned time,
++                                           std::list<cache_event> &events) {
++    return data_cache::access(addr, mf, time, events);
++  }
++};
++
+ /*****************************************************************************/
+ 
+ // See the following paper to understand this cache model:
+diff --git a/src/gpgpu-sim/gpu-sim.cc b/src/gpgpu-sim/gpu-sim.cc
+index 6b79ec5..c279b06 100644
+--- a/src/gpgpu-sim/gpu-sim.cc
++++ b/src/gpgpu-sim/gpu-sim.cc
+@@ -256,6 +256,47 @@ void memory_config::reg_options(class OptionParser *opp) {
+                          " {<nsets>:<bsize>:<assoc>,<rep>:<wr>:<alloc>:<wr_"
+                          "alloc>,<mshr>:<N>:<merge>,<mq>}",
+                          "64:128:8,L:B:m:N,A:16:4,4");
++  option_parser_register(
++      opp, "-accel_scope_enabled", OPT_BOOL, &accel_scope_enabled,
++      "Enable the Accel-SCOPE L1/L2/L3 heterogeneous-cache model", "0");
++  option_parser_register(
++      opp, "-gpgpu_cache:dl3", OPT_CSTR, &m_L3_config.m_config_string,
++      "shared banked L3 data cache config; use 'none' to disable", "none");
++  option_parser_register(
++      opp, "-accel_scope_l3_partition_queues", OPT_CSTR,
++      &accel_scope_L3_queue_config,
++      "L2-to-L3:L3-to-DRAM:DRAM-to-L3:L3-to-L2 queues", "64:64:64:64");
++  option_parser_register(opp, "-accel_scope_l2_latency", OPT_UINT32,
++                         &accel_scope_l2_latency,
++                         "additional L2 hit/miss lookup latency in core cycles",
++                         "0");
++  option_parser_register(opp, "-accel_scope_l3_latency", OPT_UINT32,
++                         &accel_scope_l3_latency,
++                         "L3 hit/miss lookup latency in core cycles", "0");
++  option_parser_register(opp, "-accel_scope_l1_access_energy_pj", OPT_DOUBLE,
++                         &accel_scope_l1_access_energy_pj,
++                         "L1 weighted energy per access in pJ", "0");
++  option_parser_register(opp, "-accel_scope_l2_access_energy_pj", OPT_DOUBLE,
++                         &accel_scope_l2_access_energy_pj,
++                         "L2 weighted energy per access in pJ", "0");
++  option_parser_register(opp, "-accel_scope_l3_access_energy_pj", OPT_DOUBLE,
++                         &accel_scope_l3_access_energy_pj,
++                         "L3 weighted energy per access in pJ", "0");
++  option_parser_register(opp, "-accel_scope_dram_access_energy_pj", OPT_DOUBLE,
++                         &accel_scope_dram_access_energy_pj,
++                         "off-chip weighted energy per request in pJ", "0");
++  option_parser_register(opp, "-accel_scope_l1_static_power_mw", OPT_DOUBLE,
++                         &accel_scope_l1_static_power_mw,
++                         "total L1 static power in mW", "0");
++  option_parser_register(opp, "-accel_scope_l2_static_power_mw", OPT_DOUBLE,
++                         &accel_scope_l2_static_power_mw,
++                         "total L2 static power in mW", "0");
++  option_parser_register(opp, "-accel_scope_l3_static_power_mw", OPT_DOUBLE,
++                         &accel_scope_l3_static_power_mw,
++                         "total L3 static/refresh power in mW", "0");
++  option_parser_register(opp, "-accel_scope_noncache_power_mw", OPT_DOUBLE,
++                         &accel_scope_noncache_power_mw,
++                         "fixed non-cache processor power in mW", "0");
+   option_parser_register(opp, "-gpgpu_cache:dl2_texture_only", OPT_BOOL,
+                          &m_L2_texure_only, "L2 cache used for texture only",
+                          "1");
+@@ -987,6 +1028,13 @@ gpgpu_sim::gpgpu_sim(const gpgpu_sim_config &config, gpgpu_context *ctx)
+   gpu_completed_cta = 0;
+   m_total_cta_launched = 0;
+   gpu_deadlock = false;
++  m_accel_scope_prev_l1_accesses = 0;
++  m_accel_scope_prev_l1_misses = 0;
++  m_accel_scope_prev_l2_accesses = 0;
++  m_accel_scope_prev_l2_misses = 0;
++  m_accel_scope_prev_l3_accesses = 0;
++  m_accel_scope_prev_l3_misses = 0;
++  m_accel_scope_prev_dram_accesses = 0;
+ 
+   gpu_stall_dramfull = 0;
+   gpu_stall_icnt2sh = 0;
+@@ -1551,6 +1599,134 @@ void gpgpu_sim::gpu_print_stat() {
+     }
+   }
+ 
++  if (m_memory_config->accel_scope_enabled &&
++      !m_memory_config->m_L3_config.disabled()) {
++    cache_stats l3_stats;
++    struct cache_sub_stats l3_css;
++    struct cache_sub_stats total_l3_css;
++    l3_stats.clear();
++    total_l3_css.clear();
++    printf("\n========= L3 cache stats =========\n");
++    for (unsigned i = 0; i < m_memory_config->m_n_mem_sub_partition; i++) {
++      l3_css.clear();
++      m_memory_sub_partition[i]->accumulate_L3cache_stats(l3_stats);
++      m_memory_sub_partition[i]->get_L3cache_sub_stats(l3_css);
++      printf("L3_cache_bank[%d]: Access = %llu, Miss = %llu, Miss_rate = "
++             "%.3lf, Pending_hits = %llu, Reservation_fails = %llu\n",
++             i, l3_css.accesses, l3_css.misses,
++             l3_css.accesses
++                 ? (double)l3_css.misses / (double)l3_css.accesses
++                 : 0.0,
++             l3_css.pending_hits, l3_css.res_fails);
++      total_l3_css += l3_css;
++    }
++    printf("L3_total_cache_accesses = %llu\n", total_l3_css.accesses);
++    printf("L3_total_cache_misses = %llu\n", total_l3_css.misses);
++    if (total_l3_css.accesses > 0)
++      printf("L3_total_cache_miss_rate = %.4lf\n",
++             (double)total_l3_css.misses / (double)total_l3_css.accesses);
++    printf("L3_total_cache_breakdown:\n");
++    l3_stats.print_stats(stdout, "L3_cache_stats_breakdown");
++  }
++
++  if (m_memory_config->accel_scope_enabled) {
++    struct cache_sub_stats total_l1_css;
++    struct cache_sub_stats total_l2_css;
++    struct cache_sub_stats total_l3_css;
++    struct cache_sub_stats css;
++    total_l1_css.clear();
++    total_l2_css.clear();
++    total_l3_css.clear();
++    for (unsigned i = 0; i < m_shader_config->n_simt_clusters; i++) {
++      css.clear();
++      m_cluster[i]->get_L1D_sub_stats(css);
++      total_l1_css += css;
++    }
++    for (unsigned i = 0; i < m_memory_config->m_n_mem_sub_partition; i++) {
++      css.clear();
++      m_memory_sub_partition[i]->get_L2cache_sub_stats(css);
++      total_l2_css += css;
++      css.clear();
++      m_memory_sub_partition[i]->get_L3cache_sub_stats(css);
++      total_l3_css += css;
++    }
++
++    unsigned cmd = 0, activity = 0, nop = 0, act = 0, pre = 0, rd = 0;
++    unsigned wr = 0, wr_wb = 0, req = 0;
++    unsigned long long dram_accesses = 0;
++    for (unsigned i = 0; i < m_memory_config->m_n_mem; i++) {
++      m_memory_partition_unit[i]->set_dram_power_stats(
++          cmd, activity, nop, act, pre, rd, wr, wr_wb, req);
++      dram_accesses += req;
++    }
++
++#define ACCEL_SCOPE_DELTA(current, previous) \
++  ((current) >= (previous) ? (current) - (previous) : (current))
++    unsigned long long l1_accesses = ACCEL_SCOPE_DELTA(
++        total_l1_css.accesses, m_accel_scope_prev_l1_accesses);
++    unsigned long long l1_misses =
++        ACCEL_SCOPE_DELTA(total_l1_css.misses, m_accel_scope_prev_l1_misses);
++    unsigned long long l2_accesses = ACCEL_SCOPE_DELTA(
++        total_l2_css.accesses, m_accel_scope_prev_l2_accesses);
++    unsigned long long l2_misses =
++        ACCEL_SCOPE_DELTA(total_l2_css.misses, m_accel_scope_prev_l2_misses);
++    unsigned long long l3_accesses = ACCEL_SCOPE_DELTA(
++        total_l3_css.accesses, m_accel_scope_prev_l3_accesses);
++    unsigned long long l3_misses =
++        ACCEL_SCOPE_DELTA(total_l3_css.misses, m_accel_scope_prev_l3_misses);
++    unsigned long long dram_delta =
++        ACCEL_SCOPE_DELTA(dram_accesses, m_accel_scope_prev_dram_accesses);
++#undef ACCEL_SCOPE_DELTA
++
++    m_accel_scope_prev_l1_accesses = total_l1_css.accesses;
++    m_accel_scope_prev_l1_misses = total_l1_css.misses;
++    m_accel_scope_prev_l2_accesses = total_l2_css.accesses;
++    m_accel_scope_prev_l2_misses = total_l2_css.misses;
++    m_accel_scope_prev_l3_accesses = total_l3_css.accesses;
++    m_accel_scope_prev_l3_misses = total_l3_css.misses;
++    m_accel_scope_prev_dram_accesses = dram_accesses;
++
++    double latency_ns = m_config.core_freq > 0
++                            ? (double)gpu_sim_cycle * 1.0e9 /
++                                  (double)m_config.core_freq
++                            : 0.0;
++    double dynamic_energy_pj =
++        l1_accesses * m_memory_config->accel_scope_l1_access_energy_pj +
++        l2_accesses * m_memory_config->accel_scope_l2_access_energy_pj +
++        l3_accesses * m_memory_config->accel_scope_l3_access_energy_pj +
++        dram_delta * m_memory_config->accel_scope_dram_access_energy_pj;
++    double static_power_mw =
++        m_memory_config->accel_scope_l1_static_power_mw +
++        m_memory_config->accel_scope_l2_static_power_mw +
++        (m_memory_config->m_L3_config.disabled()
++             ? 0.0
++             : m_memory_config->accel_scope_l3_static_power_mw);
++    double dynamic_power_mw =
++        latency_ns > 0.0 ? dynamic_energy_pj / latency_ns : 0.0;
++    double hierarchy_power_mw = static_power_mw + dynamic_power_mw;
++    double operator_power_mw =
++        m_memory_config->accel_scope_noncache_power_mw + hierarchy_power_mw;
++    double operator_energy_nj =
++        latency_ns * operator_power_mw / 1000.0;
++    double l1_hit_rate =
++        l1_accesses ? (double)(l1_accesses - l1_misses) / l1_accesses : 0.0;
++    double l2_hit_rate =
++        l2_accesses ? (double)(l2_accesses - l2_misses) / l2_accesses : 0.0;
++    double l3_hit_rate =
++        l3_accesses ? (double)(l3_accesses - l3_misses) / l3_accesses : 0.0;
++
++    printf("ACCEL_SCOPE_OPERATOR operator=\"%s\" latency_cycles=%llu "
++           "latency_ns=%.6f operator_power_mw=%.6f "
++           "hierarchy_power_mw=%.6f operator_energy_nj=%.6f "
++           "l1_accesses=%llu l1_hit_rate=%.6f l2_accesses=%llu "
++           "l2_hit_rate=%.6f l3_accesses=%llu l3_hit_rate=%.6f "
++           "dram_accesses=%llu\n",
++           executed_kernel_name().c_str(), gpu_sim_cycle, latency_ns,
++           operator_power_mw, hierarchy_power_mw, operator_energy_nj,
++           l1_accesses, l1_hit_rate, l2_accesses, l2_hit_rate, l3_accesses,
++           l3_hit_rate, dram_delta);
++  }
++
+   if (m_config.gpgpu_cflog_interval != 0) {
+     spill_log_to_file(stdout, 1, gpu_sim_cycle);
+     insn_warp_occ_print(stdout);
+diff --git a/src/gpgpu-sim/gpu-sim.h b/src/gpgpu-sim/gpu-sim.h
+index d882951..2c8d1ab 100644
+--- a/src/gpgpu-sim/gpu-sim.h
++++ b/src/gpgpu-sim/gpu-sim.h
+@@ -177,6 +177,7 @@ class memory_config {
+     m_valid = false;
+     gpgpu_dram_timing_opt = NULL;
+     gpgpu_L2_queue_config = NULL;
++    accel_scope_L3_queue_config = NULL;
+     gpgpu_ctx = ctx;
+   }
+   void init() {
+@@ -267,6 +268,7 @@ class memory_config {
+ 
+     m_address_mapping.init(m_n_mem, m_n_sub_partition_per_memory_channel);
+     m_L2_config.init(&m_address_mapping);
++    m_L3_config.init(&m_address_mapping);
+ 
+     m_valid = true;
+ 
+@@ -278,8 +280,24 @@ class memory_config {
+ 
+   bool m_valid;
+   mutable l2_cache_config m_L2_config;
++  mutable l3_cache_config m_L3_config;
+   bool m_L2_texure_only;
+ 
++  // Accel-SCOPE heterogeneous hierarchy. Energies are per cache/DRAM access;
++  // static powers describe the complete level, not one bank.
++  bool accel_scope_enabled;
++  char *accel_scope_L3_queue_config;
++  unsigned accel_scope_l2_latency;
++  unsigned accel_scope_l3_latency;
++  double accel_scope_l1_access_energy_pj;
++  double accel_scope_l2_access_energy_pj;
++  double accel_scope_l3_access_energy_pj;
++  double accel_scope_dram_access_energy_pj;
++  double accel_scope_l1_static_power_mw;
++  double accel_scope_l2_static_power_mw;
++  double accel_scope_l3_static_power_mw;
++  double accel_scope_noncache_power_mw;
++
+   char *gpgpu_dram_timing_opt;
+   char *gpgpu_L2_queue_config;
+   bool l2_ideal;
+@@ -717,6 +735,16 @@ class gpgpu_sim : public gpgpu_t {
+   class gpgpu_sim_wrapper *m_gpgpusim_wrapper;
+   unsigned long long last_gpu_sim_insn;
+ 
++  // Previous cumulative counters used to emit one Accel-SCOPE record per
++  // operator group (the interval represented by gpu_sim_cycle).
++  unsigned long long m_accel_scope_prev_l1_accesses;
++  unsigned long long m_accel_scope_prev_l1_misses;
++  unsigned long long m_accel_scope_prev_l2_accesses;
++  unsigned long long m_accel_scope_prev_l2_misses;
++  unsigned long long m_accel_scope_prev_l3_accesses;
++  unsigned long long m_accel_scope_prev_l3_misses;
++  unsigned long long m_accel_scope_prev_dram_accesses;
++
+   unsigned long long last_liveness_message_time;
+ 
+   std::map<std::string, FuncCache> m_special_cache_config;
+diff --git a/src/gpgpu-sim/l2cache.cc b/src/gpgpu-sim/l2cache.cc
+index 3f74226..3fdac90 100644
+--- a/src/gpgpu-sim/l2cache.cc
++++ b/src/gpgpu-sim/l2cache.cc
+@@ -283,7 +283,8 @@ void memory_partition_unit::simple_dram_model_cycle() {
+        m_dram_latency_queue.front().ready_cycle)) {
+     mem_fetch *mf_return = m_dram_latency_queue.front().req;
+     if (mf_return->get_access_type() != L1_WRBK_ACC &&
+-        mf_return->get_access_type() != L2_WRBK_ACC) {
++        mf_return->get_access_type() != L2_WRBK_ACC &&
++        mf_return->get_access_type() != L3_WRBK_ACC) {
+       mf_return->set_reply();
+ 
+       unsigned dest_global_spid = mf_return->get_sub_partition_id();
+@@ -296,7 +297,9 @@ void memory_partition_unit::simple_dram_model_cycle() {
+         } else {
+           m_sub_partition[dest_spid]->dram_L2_queue_push(mf_return);
+           mf_return->set_status(
+-              IN_PARTITION_DRAM_TO_L2_QUEUE,
++              m_sub_partition[dest_spid]->L3_enabled()
++                  ? IN_PARTITION_DRAM_TO_L3_QUEUE
++                  : IN_PARTITION_DRAM_TO_L2_QUEUE,
+               m_gpu->gpu_sim_cycle + m_gpu->gpu_tot_sim_cycle);
+           m_arbitration_metadata.return_credit(dest_spid);
+           MEMPART_DPRINTF(
+@@ -359,7 +362,9 @@ void memory_partition_unit::dram_cycle() {
+         delete mf_return;
+       } else {
+         m_sub_partition[dest_spid]->dram_L2_queue_push(mf_return);
+-        mf_return->set_status(IN_PARTITION_DRAM_TO_L2_QUEUE,
++        mf_return->set_status(m_sub_partition[dest_spid]->L3_enabled()
++                                  ? IN_PARTITION_DRAM_TO_L3_QUEUE
++                                  : IN_PARTITION_DRAM_TO_L2_QUEUE,
+                               m_gpu->gpu_sim_cycle + m_gpu->gpu_tot_sim_cycle);
+         m_arbitration_metadata.return_credit(dest_spid);
+ 
+@@ -426,7 +431,8 @@ void memory_partition_unit::set_done(mem_fetch *mf) {
+   int spid = global_sub_partition_id_to_local_id(global_spid);
+   assert(m_sub_partition[spid]->get_id() == global_spid);
+   if (mf->get_access_type() == L1_WRBK_ACC ||
+-      mf->get_access_type() == L2_WRBK_ACC) {
++      mf->get_access_type() == L2_WRBK_ACC ||
++      mf->get_access_type() == L3_WRBK_ACC) {
+     m_arbitration_metadata.return_credit(spid);
+     MEMPART_DPRINTF(
+         "mem_fetch request %p return from dram to sub partition %d\n", mf,
+@@ -479,23 +485,50 @@ memory_sub_partition::memory_sub_partition(unsigned sub_partition_id,
+   char L2c_name[32];
+   snprintf(L2c_name, 32, "L2_bank_%03d", m_id);
+   m_L2interface = new L2interface(this);
++  m_L3interface = new L3interface(this);
+   m_mf_allocator = new partition_mf_allocator(config);
++  m_L2cache = NULL;
++  m_L3cache = NULL;
+ 
+   if (!m_config->m_L2_config.disabled())
+     m_L2cache =
+         new l2_cache(L2c_name, m_config->m_L2_config, -1, -1, m_L2interface,
+                      m_mf_allocator, IN_PARTITION_L2_MISS_QUEUE, gpu);
+ 
++  if (L3_enabled()) {
++    char L3c_name[32];
++    snprintf(L3c_name, 32, "L3_bank_%03d", m_id);
++    m_L3cache =
++        new l3_cache(L3c_name, m_config->m_L3_config, -1, -1, m_L3interface,
++                     m_mf_allocator, IN_PARTITION_L3_MISS_QUEUE, gpu);
++  }
++
+   unsigned int icnt_L2;
+   unsigned int L2_dram;
+   unsigned int dram_L2;
+   unsigned int L2_icnt;
+   sscanf(m_config->gpgpu_L2_queue_config, "%u:%u:%u:%u", &icnt_L2, &L2_dram,
+          &dram_L2, &L2_icnt);
++  unsigned int L2_L3 = 1;
++  unsigned int L3_dram = 1;
++  unsigned int dram_L3 = 1;
++  unsigned int L3_L2 = 1;
++  int parsed = sscanf(m_config->accel_scope_L3_queue_config, "%u:%u:%u:%u",
++                      &L2_L3, &L3_dram, &dram_L3, &L3_L2);
++  assert(parsed == 4 && L2_L3 > 0 && L3_dram > 0 && dram_L3 > 0 &&
++         L3_L2 > 0);
++  m_l2_l3_queue_limit = L2_L3;
+   m_icnt_L2_queue = new fifo_pipeline<mem_fetch>("icnt-to-L2", 0, icnt_L2);
+-  m_L2_dram_queue = new fifo_pipeline<mem_fetch>("L2-to-dram", 0, L2_dram);
++  m_L2_dram_queue = new fifo_pipeline<mem_fetch>(
++      L3_enabled() ? "L2-to-L3" : "L2-to-dram", 0,
++      L3_enabled() ? L2_L3 : L2_dram);
+   m_dram_L2_queue = new fifo_pipeline<mem_fetch>("dram-to-L2", 0, dram_L2);
+   m_L2_icnt_queue = new fifo_pipeline<mem_fetch>("L2-to-icnt", 0, L2_icnt);
++  m_L3_dram_queue =
++      new fifo_pipeline<mem_fetch>("L3-to-dram", 0, L3_dram);
++  m_dram_L3_queue =
++      new fifo_pipeline<mem_fetch>("dram-to-L3", 0, dram_L3);
++  m_L3_L2_queue = new fifo_pipeline<mem_fetch>("L3-to-L2", 0, L3_L2);
+   wb_addr = -1;
+ }
+ 
+@@ -504,11 +537,19 @@ memory_sub_partition::~memory_sub_partition() {
+   delete m_L2_dram_queue;
+   delete m_dram_L2_queue;
+   delete m_L2_icnt_queue;
++  delete m_L3_dram_queue;
++  delete m_dram_L3_queue;
++  delete m_L3_L2_queue;
+   delete m_L2cache;
++  delete m_L3cache;
+   delete m_L2interface;
++  delete m_L3interface;
+ }
+ 
+ void memory_sub_partition::cache_cycle(unsigned cycle) {
++  const unsigned long long now =
++      m_gpu->gpu_sim_cycle + m_gpu->gpu_tot_sim_cycle;
++
+   // L2 fill responses
+   if (!m_config->m_L2_config.disabled()) {
+     if (m_L2cache->access_ready() && !m_L2_icnt_queue->full()) {
+@@ -524,17 +565,14 @@ void memory_sub_partition::cache_cycle(unsigned cycle) {
+           delete temp;
+         }
+         mf->set_reply();
+-        mf->set_status(IN_PARTITION_L2_TO_ICNT_QUEUE,
+-                       m_gpu->gpu_sim_cycle + m_gpu->gpu_tot_sim_cycle);
++        mf->set_status(IN_PARTITION_L2_TO_ICNT_QUEUE, now);
+         m_L2_icnt_queue->push(mf);
+       } else {
+         if (m_config->m_L2_config.m_write_alloc_policy == FETCH_ON_WRITE) {
+           mem_fetch *original_wr_mf = mf->get_original_wr_mf();
+           assert(original_wr_mf);
+           original_wr_mf->set_reply();
+-          original_wr_mf->set_status(
+-              IN_PARTITION_L2_TO_ICNT_QUEUE,
+-              m_gpu->gpu_sim_cycle + m_gpu->gpu_tot_sim_cycle);
++          original_wr_mf->set_status(IN_PARTITION_L2_TO_ICNT_QUEUE, now);
+           m_L2_icnt_queue->push(original_wr_mf);
+         }
+         m_request_tracker.erase(mf);
+@@ -543,34 +581,135 @@ void memory_sub_partition::cache_cycle(unsigned cycle) {
+     }
+   }
+ 
+-  // DRAM to L2 (texture) and icnt (not texture)
+-  if (!m_dram_L2_queue->empty()) {
+-    mem_fetch *mf = m_dram_L2_queue->top();
++  // Completed L3 hits/fills return to L2 through the same fill path used by
++  // direct DRAM responses in the legacy two-level hierarchy.
++  fifo_pipeline<mem_fetch> *lower_L2_queue =
++      L3_enabled() ? m_L3_L2_queue : m_dram_L2_queue;
++  if (!lower_L2_queue->empty()) {
++    mem_fetch *mf = lower_L2_queue->top();
+     if (!m_config->m_L2_config.disabled() && m_L2cache->waiting_for_fill(mf)) {
+       if (m_L2cache->fill_port_free()) {
+-        mf->set_status(IN_PARTITION_L2_FILL_QUEUE,
+-                       m_gpu->gpu_sim_cycle + m_gpu->gpu_tot_sim_cycle);
+-        m_L2cache->fill(mf, m_gpu->gpu_sim_cycle + m_gpu->gpu_tot_sim_cycle +
+-                                m_memcpy_cycle_offset);
+-        // printf("mem_fetch request %llx fill l2cache\n",
+-        //        mf->get_addr());
+-        m_dram_L2_queue->pop();
+-
++        mf->set_status(IN_PARTITION_L2_FILL_QUEUE, now);
++        m_L2cache->fill(mf, now + m_memcpy_cycle_offset);
++        lower_L2_queue->pop();
+       }
+     } else if (!m_L2_icnt_queue->full()) {
+       if (mf->is_write() && mf->get_type() == WRITE_ACK)
+-        mf->set_status(IN_PARTITION_L2_TO_ICNT_QUEUE,
+-                       m_gpu->gpu_sim_cycle + m_gpu->gpu_tot_sim_cycle);
++        mf->set_status(IN_PARTITION_L2_TO_ICNT_QUEUE, now);
+       m_L2_icnt_queue->push(mf);
+-      m_dram_L2_queue->pop();
++      lower_L2_queue->pop();
+     }
+   }
+ 
+-  // prior L2 misses inserted into m_L2_dram_queue here
++  // Prior L2 misses are pushed either to DRAM (legacy) or to the fixed L3
++  // latency queue by L2interface.
+   if (!m_config->m_L2_config.disabled()) m_L2cache->cycle();
+ 
++  if (L3_enabled()) {
++    // Completed L3 accesses become responses to L2. Internal L3 write
++    // allocation reads are consumed here; their original write is either
++    // acknowledged upward or discarded when it was an L2 writeback.
++    if (m_L3cache->access_ready() && !m_L3_L2_queue->full()) {
++      mem_fetch *mf = m_L3cache->next_access();
++      if (mf->get_access_type() != L3_WR_ALLOC_R) {
++        mf->set_status(IN_PARTITION_L3_TO_L2_QUEUE, now);
++        m_L3_L2_queue->push(mf);
++      } else {
++        mem_fetch *original_wr_mf = mf->get_original_wr_mf();
++        assert(original_wr_mf);
++        if (m_config->m_L3_config.m_write_alloc_policy == FETCH_ON_WRITE) {
++          if (original_wr_mf->get_access_type() == L2_WRBK_ACC) {
++            delete original_wr_mf;
++          } else {
++            original_wr_mf->set_reply();
++            original_wr_mf->set_status(IN_PARTITION_L3_TO_L2_QUEUE, now);
++            m_L3_L2_queue->push(original_wr_mf);
++          }
++        }
++        delete mf;
++      }
++    }
++
++    // DRAM responses fill L3 first. Requests that bypassed L3 are forwarded
++    // to L2 unchanged.
++    if (!m_dram_L3_queue->empty()) {
++      mem_fetch *mf = m_dram_L3_queue->top();
++      if (m_L3cache->waiting_for_fill(mf)) {
++        if (m_L3cache->fill_port_free()) {
++          mf->set_status(IN_PARTITION_L3_FILL_QUEUE, now);
++          m_L3cache->fill(mf, now + m_memcpy_cycle_offset);
++          m_dram_L3_queue->pop();
++        }
++      } else if (!m_L3_L2_queue->full()) {
++        mf->set_status(IN_PARTITION_L3_TO_L2_QUEUE, now);
++        m_L3_L2_queue->push(mf);
++        m_dram_L3_queue->pop();
++      }
++    }
++
++    m_L3cache->cycle();
++
++    // Release requests whose configured L3 lookup latency has elapsed.
++    if (!m_l2_l3_latency_queue.empty() &&
++        m_l2_l3_latency_queue.front().ready_cycle <= now &&
++        !m_L2_dram_queue->full()) {
++      mem_fetch *mf = m_l2_l3_latency_queue.front().req;
++      m_l2_l3_latency_queue.pop_front();
++      mf->set_status(IN_PARTITION_L2_TO_L3_QUEUE, now);
++      m_L2_dram_queue->push(mf);
++    }
++
++    // Probe one ready L2 miss/writeback in L3.
++    if (!m_L2_dram_queue->empty() && !m_L3_L2_queue->full() &&
++        m_L3cache->data_port_free()) {
++      mem_fetch *mf = m_L2_dram_queue->top();
++      std::list<cache_event> events;
++      enum cache_request_status status =
++          m_L3cache->access(mf->get_addr(), mf, now + m_memcpy_cycle_offset,
++                            events);
++      bool write_sent = was_write_sent(events);
++      bool read_sent = was_read_sent(events);
++      if (status == HIT) {
++        if (!write_sent) {
++          assert(!read_sent);
++          if (mf->get_access_type() == L2_WRBK_ACC) {
++            delete mf;
++          } else {
++            mf->set_status(IN_PARTITION_L3_TO_L2_QUEUE, now);
++            m_L3_L2_queue->push(mf);
++          }
++          m_L2_dram_queue->pop();
++        } else {
++          m_L2_dram_queue->pop();
++        }
++      } else if (status != RESERVATION_FAIL) {
++        if (mf->is_write() &&
++            (m_config->m_L3_config.m_write_alloc_policy == FETCH_ON_WRITE ||
++             m_config->m_L3_config.m_write_alloc_policy ==
++                 LAZY_FETCH_ON_READ) &&
++            !was_writeallocate_sent(events)) {
++          if (mf->get_access_type() == L2_WRBK_ACC) {
++            delete mf;
++          } else if (m_config->m_L3_config.get_write_policy() == WRITE_BACK) {
++            mf->set_reply();
++            mf->set_status(IN_PARTITION_L3_TO_L2_QUEUE, now);
++            m_L3_L2_queue->push(mf);
++          }
++        }
++        m_L2_dram_queue->pop();
++      } else {
++        assert(!write_sent);
++        assert(!read_sent);
++      }
++    }
++  }
++
+   // new L2 texture accesses and/or non-texture accesses
+-  if (!m_L2_dram_queue->full() && !m_icnt_L2_queue->empty()) {
++  bool lower_queue_has_room =
++      L3_enabled()
++          ? (m_l2_l3_latency_queue.size() < m_l2_l3_queue_limit)
++          : !m_L2_dram_queue->full();
++  if (lower_queue_has_room && !m_icnt_L2_queue->empty()) {
+     mem_fetch *mf = m_icnt_L2_queue->top();
+     if (!m_config->m_L2_config.disabled() &&
+         ((m_config->m_L2_texure_only && mf->istexture()) ||
+@@ -611,8 +750,7 @@ void memory_sub_partition::cache_cycle(unsigned cycle) {
+                 delete mf;
+               } else {
+                 mf->set_reply();
+-                mf->set_status(IN_PARTITION_L2_TO_ICNT_QUEUE,
+-                              m_gpu->gpu_sim_cycle + m_gpu->gpu_tot_sim_cycle);
++              mf->set_status(IN_PARTITION_L2_TO_ICNT_QUEUE, now);
+                 m_L2_icnt_queue->push(mf);
+               }
+               m_icnt_L2_queue->pop();
+@@ -631,8 +769,7 @@ void memory_sub_partition::cache_cycle(unsigned cycle) {
+                 delete mf;
+               } else if (m_config->m_L2_config.get_write_policy() == WRITE_BACK) {
+                 mf->set_reply();
+-                mf->set_status(IN_PARTITION_L2_TO_ICNT_QUEUE,
+-                              m_gpu->gpu_sim_cycle + m_gpu->gpu_tot_sim_cycle);
++                mf->set_status(IN_PARTITION_L2_TO_ICNT_QUEUE, now);
+                 m_L2_icnt_queue->push(mf);
+               }
+             }
+@@ -652,8 +789,7 @@ void memory_sub_partition::cache_cycle(unsigned cycle) {
+             delete mf;
+           } else {
+             mf->set_reply();
+-            mf->set_status(IN_PARTITION_L2_TO_ICNT_QUEUE,
+-                          m_gpu->gpu_sim_cycle + m_gpu->gpu_tot_sim_cycle);
++            mf->set_status(IN_PARTITION_L2_TO_ICNT_QUEUE, now);
+             m_L2_icnt_queue->push(mf);
+           }
+           m_icnt_L2_queue->pop();
+@@ -661,9 +797,7 @@ void memory_sub_partition::cache_cycle(unsigned cycle) {
+       }
+     } else {
+       // L2 is disabled or non-texture access to texture-only L2
+-      mf->set_status(IN_PARTITION_L2_TO_DRAM_QUEUE,
+-                     m_gpu->gpu_sim_cycle + m_gpu->gpu_tot_sim_cycle);
+-      m_L2_dram_queue->push(mf);
++      m_L2interface->push(mf);
+       m_icnt_L2_queue->pop();
+     }
+   }
+@@ -674,8 +808,7 @@ void memory_sub_partition::cache_cycle(unsigned cycle) {
+     mem_fetch *mf = m_rop.front().req;
+     m_rop.pop();
+     m_icnt_L2_queue->push(mf);
+-    mf->set_status(IN_PARTITION_ICNT_TO_L2_QUEUE,
+-                   m_gpu->gpu_sim_cycle + m_gpu->gpu_tot_sim_cycle);
++    mf->set_status(IN_PARTITION_ICNT_TO_L2_QUEUE, now);
+   }
+ }
+ 
+@@ -686,25 +819,35 @@ bool memory_sub_partition::full(unsigned size) const {
+ }
+ 
+ bool memory_sub_partition::L2_dram_queue_empty() const {
+-  return m_L2_dram_queue->empty();
++  return L3_enabled() ? m_L3_dram_queue->empty()
++                      : m_L2_dram_queue->empty();
+ }
+ 
+ bool memory_sub_partition::dram_L2_queue_empty() const {
+-  return m_dram_L2_queue->empty();
++  return L3_enabled() ? m_dram_L3_queue->empty()
++                      : m_dram_L2_queue->empty();
+ }
+ 
+ class mem_fetch *memory_sub_partition::L2_dram_queue_top() const {
+-  return m_L2_dram_queue->top();
++  return L3_enabled() ? m_L3_dram_queue->top() : m_L2_dram_queue->top();
+ }
+ 
+-void memory_sub_partition::L2_dram_queue_pop() { m_L2_dram_queue->pop(); }
++void memory_sub_partition::L2_dram_queue_pop() {
++  if (L3_enabled())
++    m_L3_dram_queue->pop();
++  else
++    m_L2_dram_queue->pop();
++}
+ 
+ bool memory_sub_partition::dram_L2_queue_full() const {
+-  return m_dram_L2_queue->full();
++  return L3_enabled() ? m_dram_L3_queue->full() : m_dram_L2_queue->full();
+ }
+ 
+ void memory_sub_partition::dram_L2_queue_push(class mem_fetch *mf) {
+-  m_dram_L2_queue->push(mf);
++  if (L3_enabled())
++    m_dram_L3_queue->push(mf);
++  else
++    m_dram_L2_queue->push(mf);
+ }
+ 
+ void memory_sub_partition::print_cache_stat(unsigned &accesses,
+@@ -823,6 +966,20 @@ unsigned memory_sub_partition::invalidateL2Except(std::vector<std::pair<size_t,
+ 
+ bool memory_sub_partition::busy() const { return !m_request_tracker.empty(); }
+ 
++bool memory_sub_partition::L3_enabled() const {
++  return m_config->accel_scope_enabled && !m_config->m_L3_config.disabled();
++}
++
++bool memory_sub_partition::m_l2_isempty() const {
++  bool empty = (m_L2cache == NULL || m_L2cache->isempty()) &&
++               m_l2_l3_latency_queue.empty() && m_L2_dram_queue->empty();
++  if (L3_enabled()) {
++    empty = empty && m_L3cache->isempty() && m_L3_dram_queue->empty() &&
++            m_dram_L3_queue->empty() && m_L3_L2_queue->empty();
++  }
++  return empty;
++}
++
+ std::vector<mem_fetch *>
+ memory_sub_partition::breakdown_request_to_sector_requests(mem_fetch *mf) {
+   std::vector<mem_fetch *> result;
+@@ -903,14 +1060,15 @@ void memory_sub_partition::push(mem_fetch *m_req, unsigned long long cycle) {
+     for (unsigned i = 0; i < reqs.size(); ++i) {
+       mem_fetch *req = reqs[i];
+       m_request_tracker.insert(req);
+-      if (req->istexture()) {
++      if (req->istexture() && m_config->accel_scope_l2_latency == 0) {
+         m_icnt_L2_queue->push(req);
+         req->set_status(IN_PARTITION_ICNT_TO_L2_QUEUE,
+                         m_gpu->gpu_sim_cycle + m_gpu->gpu_tot_sim_cycle);
+       } else {
+         rop_delay_t r;
+         r.req = req;
+-        r.ready_cycle = cycle + m_config->rop_latency;
++        r.ready_cycle = cycle + m_config->accel_scope_l2_latency;
++        if (!req->istexture()) r.ready_cycle += m_config->rop_latency;
+         m_rop.push(r);
+         req->set_status(IN_PARTITION_ROP_DELAY,
+                         m_gpu->gpu_sim_cycle + m_gpu->gpu_tot_sim_cycle);
+@@ -961,6 +1119,16 @@ void memory_sub_partition::get_L2cache_sub_stats(
+   }
+ }
+ 
++void memory_sub_partition::accumulate_L3cache_stats(
++    class cache_stats &l3_stats) const {
++  if (L3_enabled()) l3_stats += m_L3cache->get_stats();
++}
++
++void memory_sub_partition::get_L3cache_sub_stats(
++    struct cache_sub_stats &css) const {
++  if (L3_enabled()) m_L3cache->get_sub_stats(css);
++}
++
+ void memory_sub_partition::get_L2cache_sub_stats_pw(
+     struct cache_sub_stats_pw &css) const {
+   if (!m_config->m_L2_config.disabled()) {
+diff --git a/src/gpgpu-sim/l2cache.h b/src/gpgpu-sim/l2cache.h
+index 76102b3..3a8d505 100644
+--- a/src/gpgpu-sim/l2cache.h
++++ b/src/gpgpu-sim/l2cache.h
+@@ -200,6 +200,9 @@ class memory_sub_partition {
+ 
+   void accumulate_L2cache_stats(class cache_stats &l2_stats) const;
+   void get_L2cache_sub_stats(struct cache_sub_stats &css) const;
++  void accumulate_L3cache_stats(class cache_stats &l3_stats) const;
++  void get_L3cache_sub_stats(struct cache_sub_stats &css) const;
++  bool L3_enabled() const;
+ 
+   // Support for getting per-window L2 stats for AerialVision
+   void get_L2cache_sub_stats_pw(struct cache_sub_stats_pw &css) const;
+@@ -211,10 +214,7 @@ class memory_sub_partition {
+     m_memcpy_cycle_offset += 1;
+   }
+ 
+-  bool m_l2_isempty()
+-  {
+-    return m_L2cache->isempty();
+-  }
++  bool m_l2_isempty() const;
+ 
+  private:
+   // data
+@@ -222,6 +222,8 @@ class memory_sub_partition {
+   const memory_config *m_config;
+   class l2_cache *m_L2cache;
+   class L2interface *m_L2interface;
++  class l3_cache *m_L3cache;
++  class L3interface *m_L3interface;
+   class gpgpu_sim *m_gpu;
+   partition_mf_allocator *m_mf_allocator;
+ 
+@@ -232,11 +234,22 @@ class memory_sub_partition {
+   };
+   std::queue<rop_delay_t> m_rop;
+ 
++  // Fixed L3 lookup latency is represented before the request probes L3.
++  struct l3_delay_t {
++    unsigned long long ready_cycle;
++    class mem_fetch *req;
++  };
++  std::list<l3_delay_t> m_l2_l3_latency_queue;
++  unsigned m_l2_l3_queue_limit;
++
+   // these are various FIFOs between units within a memory partition
+   fifo_pipeline<mem_fetch> *m_icnt_L2_queue;
+   fifo_pipeline<mem_fetch> *m_L2_dram_queue;
+   fifo_pipeline<mem_fetch> *m_dram_L2_queue;
+   fifo_pipeline<mem_fetch> *m_L2_icnt_queue;  // L2 cache hit response queue
++  fifo_pipeline<mem_fetch> *m_L3_dram_queue;
++  fifo_pipeline<mem_fetch> *m_dram_L3_queue;
++  fifo_pipeline<mem_fetch> *m_L3_L2_queue;
+ 
+   class mem_fetch *L2dramout;
+   unsigned long long int wb_addr;
+@@ -246,6 +259,7 @@ class memory_sub_partition {
+   std::set<mem_fetch *> m_request_tracker;
+ 
+   friend class L2interface;
++  friend class L3interface;
+ 
+   std::vector<mem_fetch *> breakdown_request_to_sector_requests(mem_fetch *mf);
+ 
+@@ -264,9 +278,24 @@ class L2interface : public mem_fetch_interface {
+   virtual ~L2interface() {}
+   virtual bool full(unsigned size, bool write) const {
+     // assume read and write packets all same size
++    if (m_unit->L3_enabled())
++      return m_unit->m_l2_l3_latency_queue.size() >=
++             m_unit->m_l2_l3_queue_limit;
+     return m_unit->m_L2_dram_queue->full();
+   }
+   virtual void push(mem_fetch *mf) {
++    if (m_unit->L3_enabled()) {
++      memory_sub_partition::l3_delay_t delay;
++      delay.ready_cycle = m_unit->m_gpu->gpu_sim_cycle +
++                          m_unit->m_gpu->gpu_tot_sim_cycle +
++                          m_unit->m_config->accel_scope_l3_latency;
++      delay.req = mf;
++      mf->set_status(IN_PARTITION_L2_TO_L3_QUEUE,
++                     m_unit->m_gpu->gpu_sim_cycle +
++                         m_unit->m_gpu->gpu_tot_sim_cycle);
++      m_unit->m_l2_l3_latency_queue.push_back(delay);
++      return;
++    }
+     mf->set_status(IN_PARTITION_L2_TO_DRAM_QUEUE, 0 /*FIXME*/);
+     m_unit->m_L2_dram_queue->push(mf);
+   }
+@@ -275,4 +304,22 @@ class L2interface : public mem_fetch_interface {
+   memory_sub_partition *m_unit;
+ };
+ 
++class L3interface : public mem_fetch_interface {
++ public:
++  L3interface(memory_sub_partition *unit) { m_unit = unit; }
++  virtual ~L3interface() {}
++  virtual bool full(unsigned size, bool write) const {
++    return m_unit->m_L3_dram_queue->full();
++  }
++  virtual void push(mem_fetch *mf) {
++    mf->set_status(IN_PARTITION_L3_TO_DRAM_QUEUE,
++                   m_unit->m_gpu->gpu_sim_cycle +
++                       m_unit->m_gpu->gpu_tot_sim_cycle);
++    m_unit->m_L3_dram_queue->push(mf);
++  }
++
++ private:
++  memory_sub_partition *m_unit;
++};
++
+ #endif
+diff --git a/src/gpgpu-sim/mem_fetch.h b/src/gpgpu-sim/mem_fetch.h
+index 4e391b0..64ec258 100644
+--- a/src/gpgpu-sim/mem_fetch.h
++++ b/src/gpgpu-sim/mem_fetch.h
+@@ -62,7 +62,8 @@ class mem_fetch {
+   void set_status(enum mem_fetch_status status, unsigned long long cycle);
+   void set_reply() {
+     assert(m_access.get_type() != L1_WRBK_ACC &&
+-           m_access.get_type() != L2_WRBK_ACC);
++           m_access.get_type() != L2_WRBK_ACC &&
++           m_access.get_type() != L3_WRBK_ACC);
+     if (m_type == READ_REQUEST) {
+       assert(!get_is_write());
+       m_type = READ_REPLY;
+diff --git a/src/gpgpu-sim/mem_fetch_status.tup b/src/gpgpu-sim/mem_fetch_status.tup
+index b4d4e7a..65ba67c 100644
+--- a/src/gpgpu-sim/mem_fetch_status.tup
++++ b/src/gpgpu-sim/mem_fetch_status.tup
+@@ -39,12 +39,18 @@ MF_TUP_BEGIN( mem_fetch_status )
+     MF_TUP( IN_PARTITION_L2_TO_DRAM_QUEUE ),
+     MF_TUP( IN_PARTITION_DRAM_LATENCY_QUEUE ),
+     MF_TUP( IN_PARTITION_L2_MISS_QUEUE ),
++    MF_TUP( IN_PARTITION_L2_TO_L3_QUEUE ),
++    MF_TUP( IN_PARTITION_L3_MISS_QUEUE ),
++    MF_TUP( IN_PARTITION_L3_TO_DRAM_QUEUE ),
+     MF_TUP( IN_PARTITION_MC_INTERFACE_QUEUE ),
+     MF_TUP( IN_PARTITION_MC_INPUT_QUEUE ),
+     MF_TUP( IN_PARTITION_MC_BANK_ARB_QUEUE ),
+     MF_TUP( IN_PARTITION_DRAM ),
+     MF_TUP( IN_PARTITION_MC_RETURNQ ),
+     MF_TUP( IN_PARTITION_DRAM_TO_L2_QUEUE ),
++    MF_TUP( IN_PARTITION_DRAM_TO_L3_QUEUE ),
++    MF_TUP( IN_PARTITION_L3_FILL_QUEUE ),
++    MF_TUP( IN_PARTITION_L3_TO_L2_QUEUE ),
+     MF_TUP( IN_PARTITION_L2_FILL_QUEUE ),
+     MF_TUP( IN_PARTITION_L2_TO_ICNT_QUEUE ),
+     MF_TUP( IN_ICNT_TO_SHADER ),
+diff --git a/src/gpgpu-sim/traffic_breakdown.cc b/src/gpgpu-sim/traffic_breakdown.cc
+index 5cc7725..37dfef6 100644
+--- a/src/gpgpu-sim/traffic_breakdown.cc
++++ b/src/gpgpu-sim/traffic_breakdown.cc
+@@ -38,8 +38,10 @@ std::string traffic_breakdown::classify_memfetch(class mem_fetch* mf) {
+     case INST_ACC_R:
+     case L1_WRBK_ACC:
+     case L2_WRBK_ACC:
++    case L3_WRBK_ACC:
+     case L1_WR_ALLOC_R:
+     case L2_WR_ALLOC_R:
++    case L3_WR_ALLOC_R:
+       traffic_name = mem_access_type_str(access_type);
+       break;
+     case GLOBAL_ACC_R:
+diff --git a/version_detection.mk b/version_detection.mk
+index 81c1d2a..c421060 100644
+--- a/version_detection.mk
++++ b/version_detection.mk
+@@ -43,7 +43,7 @@ CUDA_VERSION_STRING:=$(shell $(CUDA_INSTALL_PATH)/bin/nvcc --version | awk '/rel
+ CUDART_VERSION:=$(shell echo $(CUDA_VERSION_STRING) | sed 's/\./ /' | awk '{printf("%02u%02u", 10*int($$1), 10*$$2);}')
+ 
+ # Detect GCC Version 
+-CC_VERSION := $(shell gcc --version | head -1 | awk '{for(i=1;i<=NF;i++){ if(match($$i,/^[0-9]\.[0-9]\.[0-9]$$/))  {print $$i; exit 0 }}}')
++CC_VERSION := $(shell gcc -dumpfullversion -dumpversion)
+ 
+ # Detect Support for C++11 (C++0x) from GCC Version 
+-GNUC_CPP0X := $(shell gcc --version | perl -ne 'if (/gcc\s+\(.*\)\s+([0-9.]+)/){ if($$1 >= 4.3) {$$n=1} else {$$n=0;} } END { print $$n; }')
++GNUC_CPP0X := $(shell gcc -dumpversion | awk -F. '{print ($$1 >= 5 || ($$1 == 4 && $$2 >= 3)) ? 1 : 0}')

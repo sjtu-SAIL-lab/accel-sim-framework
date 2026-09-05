@@ -1,0 +1,114 @@
+{
+  "schema_version": 9,
+  "scope_commit": "c87e22db5f3c163cfe4bf57d5eae49a9dfe6495a",
+  "source_sha256": "535fa23014fef3b3bffd400760ea5b64a0d44238d89e6d8391d8e87527c96106",
+  "workload": "ffn",
+  "cases": {
+    "all_sram": [
+      {
+        "layer": "L1",
+        "device": "SRAM",
+        "scope_capacity_bytes": 196608,
+        "mapped_capacity_bytes": 196608,
+        "scope_latency_ns": 1.0,
+        "energy_pj": 82.89882216429862
+      },
+      {
+        "layer": "L2",
+        "device": "SRAM",
+        "scope_capacity_bytes": 1048576,
+        "mapped_capacity_bytes": 1048576,
+        "scope_latency_ns": 2.225238462456986,
+        "energy_pj": 168.84823324644796
+      },
+      {
+        "layer": "L3",
+        "device": "SRAM",
+        "scope_capacity_bytes": 3145728,
+        "mapped_capacity_bytes": 2097152,
+        "scope_latency_ns": 1.54190577314389,
+        "energy_pj": 322.84823324644793
+      }
+    ],
+    "sram_osfet_osfet": [
+      {
+        "layer": "L1",
+        "device": "SRAM",
+        "scope_capacity_bytes": 196608,
+        "mapped_capacity_bytes": 196608,
+        "scope_latency_ns": 1.0,
+        "energy_pj": 82.89882216429862
+      },
+      {
+        "layer": "L2",
+        "device": "OSFET-eDRAM",
+        "scope_capacity_bytes": 16777216,
+        "mapped_capacity_bytes": 16777216,
+        "scope_latency_ns": 2.8092840692594887,
+        "energy_pj": 329.93922210788884
+      },
+      {
+        "layer": "L3",
+        "device": "OSFET-eDRAM",
+        "scope_capacity_bytes": 50331648,
+        "mapped_capacity_bytes": 33554432,
+        "scope_latency_ns": 1.0835269984588252,
+        "energy_pj": 637.3423598205087
+      }
+    ],
+    "sram_mram_mram": [
+      {
+        "layer": "L1",
+        "device": "SRAM",
+        "scope_capacity_bytes": 196608,
+        "mapped_capacity_bytes": 196608,
+        "scope_latency_ns": 1.0,
+        "energy_pj": 82.89882216429862
+      },
+      {
+        "layer": "L2",
+        "device": "SOT-MRAM",
+        "scope_capacity_bytes": 1468416,
+        "mapped_capacity_bytes": 1048576,
+        "scope_latency_ns": 2.5768091780971516,
+        "energy_pj": 323.39415385814175
+      },
+      {
+        "layer": "L3",
+        "device": "SOT-MRAM",
+        "scope_capacity_bytes": 4403200,
+        "mapped_capacity_bytes": 4194304,
+        "scope_latency_ns": 3.768798659128262,
+        "energy_pj": 413.5495978675102
+      }
+    ],
+    "optimized": [
+      {
+        "layer": "L1",
+        "device": "SRAM",
+        "scope_capacity_bytes": 196608,
+        "mapped_capacity_bytes": 196608,
+        "scope_latency_ns": 1.0,
+        "energy_pj": 82.89882216429862
+      },
+      {
+        "layer": "L2",
+        "device": "AsyFET-eDRAM",
+        "scope_capacity_bytes": 4194304,
+        "mapped_capacity_bytes": 4194304,
+        "scope_latency_ns": 1.5343152067556796,
+        "energy_pj": 173.61794559498108
+      },
+      {
+        "layer": "L3",
+        "device": "OSFET-eDRAM",
+        "scope_capacity_bytes": 50331648,
+        "mapped_capacity_bytes": 33554432,
+        "scope_latency_ns": 1.0835269984588252,
+        "energy_pj": 637.3423598205087
+      }
+    ]
+  },
+  "mapping": "16 memory channels, 4 subpartitions/channel; round sets down to powers of two; preserve Orin native L1/NoC/DRAM timing",
+  "power": "Per-access weighted read/write energy from SCOPE FFN mix; L1 leakage multiplied by 16 SMs; NoC/compute power requires separate GPU model. No target-percentage scaling."
+}

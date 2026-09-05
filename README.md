@@ -1,4 +1,23 @@
-# Welcome to the top-level repo of Accel-Sim and AccelWattch
+# Accel-SCOPE
+
+Accel-SCOPE extends the Jetson Orin Accel-Sim model with an optional L3 and
+independently configurable L1/L2/L3 latency, access energy, and static power.
+Each simulated kernel prints one `ACCEL_SCOPE_OPERATOR` record containing
+latency, memory-hierarchy power, per-level hit rate, and off-chip request count.
+
+The included comparison consumes the repository's existing DeepBench FP16 GEMM
+trace; it does not compile CUDA applications or generate traces. On a machine
+where `accel-sim.out` is already built, run:
+
+```bash
+source ./gpu-simulator/setup_environment.sh release
+./util/accel_scope/run_existing_trace.sh /path/to/inference_half_7680_1_2560_0_0/traces
+```
+
+See [`results/accel-scope/README.md`](results/accel-scope/README.md) for the
+measured baseline/heterogeneous-cache comparison and modeling limits.
+
+## Upstream Accel-Sim and AccelWattch
 
 The [ISCA 2020 paper](https://conferences.computer.org/isca/pdfs/ISCA2020-4QlDegUf3fKiwUXfV0KdCm/466100a473/466100a473.pdf)
 describes the goals of Accel-Sim and introduces the tool. This readme is meant to provide tutorial-like details on how to use the Accel-Sim

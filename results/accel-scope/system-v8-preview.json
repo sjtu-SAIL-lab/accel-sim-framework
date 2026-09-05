@@ -1,0 +1,140 @@
+{
+  "measurement_scope": "gpu_kernel",
+  "complete": true,
+  "scope_version": 8,
+  "status": "historical scenario preview; not a v9 rerun",
+  "power_model": "Historical assumed shared nonstorage 1368.525540 mW; scale 0.015 selected for target fraction, not hardware calibrated",
+  "fom_definition": "1/(latency_ns*gpu_power_mw)",
+  "cases": [
+    {
+      "id": "baseline",
+      "label": "SRAM baseline"
+    },
+    {
+      "id": "scope_banked4",
+      "label": "SCOPE v8 heterogeneous"
+    }
+  ],
+  "operators": [
+    {
+      "id": "gemm_2048_64_2048",
+      "label": "GEMM",
+      "results": {
+        "baseline": {
+          "latency_cycles": 134688,
+          "latency_ns": 103606.153846,
+          "operator_power_mw": 10419.009875,
+          "gpu_power_mw": 10419.009875,
+          "gpu_nonstorage_power_mw": 1368.52554,
+          "hierarchy_power_mw": 9050.484335,
+          "memory_power_share_percent": 86.865109,
+          "operator_energy_nj": 1079473.540074,
+          "l1_accesses": 557312,
+          "l1_hit_rate": 0.123536,
+          "l2_accesses": 509927,
+          "l2_hit_rate": 0.359469,
+          "l3_accesses": 0,
+          "l3_hit_rate": 0,
+          "dram_accesses": 283616
+        },
+        "scope_banked4": {
+          "latency_cycles": 118905,
+          "latency_ns": 91465.384615,
+          "operator_power_mw": 3760.228265,
+          "gpu_power_mw": 3760.228265,
+          "gpu_nonstorage_power_mw": 1368.52554,
+          "hierarchy_power_mw": 2391.702725,
+          "memory_power_share_percent": 63.605254,
+          "operator_energy_nj": 343930.724535,
+          "l1_accesses": 557312,
+          "l1_hit_rate": 0.149374,
+          "l2_accesses": 495480,
+          "l2_hit_rate": 1,
+          "l3_accesses": 0,
+          "l3_hit_rate": 0,
+          "dram_accesses": 0
+        }
+      }
+    },
+    {
+      "id": "gemv_like_6144_4_2048",
+      "label": "GEMV-like",
+      "results": {
+        "baseline": {
+          "latency_cycles": 196264,
+          "latency_ns": 150972.307692,
+          "operator_power_mw": 16969.704335,
+          "gpu_power_mw": 16969.704335,
+          "gpu_nonstorage_power_mw": 1368.52554,
+          "hierarchy_power_mw": 15601.178795,
+          "memory_power_share_percent": 91.935478,
+          "operator_energy_nj": 2561955.424367,
+          "l1_accesses": 847872,
+          "l1_hit_rate": 0.045101,
+          "l2_accesses": 809632,
+          "l2_hit_rate": 0.012845,
+          "l3_accesses": 0,
+          "l3_hit_rate": 0,
+          "dram_accesses": 790015
+        },
+        "scope_banked4": {
+          "latency_cycles": 184044,
+          "latency_ns": 141572.307692,
+          "operator_power_mw": 3855.368679,
+          "gpu_power_mw": 3855.368679,
+          "gpu_nonstorage_power_mw": 1368.52554,
+          "hierarchy_power_mw": 2486.843139,
+          "memory_power_share_percent": 64.503381,
+          "operator_energy_nj": 545813.440947,
+          "l1_accesses": 847872,
+          "l1_hit_rate": 0.045337,
+          "l2_accesses": 809432,
+          "l2_hit_rate": 1,
+          "l3_accesses": 0,
+          "l3_hit_rate": 0,
+          "dram_accesses": 0
+        }
+      }
+    },
+    {
+      "id": "gemm_35_1500_2560",
+      "label": "small-M GEMM",
+      "results": {
+        "baseline": {
+          "latency_cycles": 180546,
+          "latency_ns": 138881.538462,
+          "operator_power_mw": 8442.713451,
+          "gpu_power_mw": 8442.713451,
+          "gpu_nonstorage_power_mw": 1368.52554,
+          "hierarchy_power_mw": 7074.187911,
+          "memory_power_share_percent": 83.790454,
+          "operator_energy_nj": 1172537.032925,
+          "l1_accesses": 2816470,
+          "l1_hit_rate": 0.880645,
+          "l2_accesses": 366908,
+          "l2_hit_rate": 0.255743,
+          "l3_accesses": 0,
+          "l3_hit_rate": 0,
+          "dram_accesses": 246007
+        },
+        "scope_banked4": {
+          "latency_cycles": 154688,
+          "latency_ns": 118990.769231,
+          "operator_power_mw": 4366.524331,
+          "gpu_power_mw": 4366.524331,
+          "gpu_nonstorage_power_mw": 1368.52554,
+          "hierarchy_power_mw": 2997.998791,
+          "memory_power_share_percent": 68.658699,
+          "operator_energy_nj": 519576.08906,
+          "l1_accesses": 2816470,
+          "l1_hit_rate": 0.886087,
+          "l2_accesses": 351618,
+          "l2_hit_rate": 1,
+          "l3_accesses": 0,
+          "l3_hit_rate": 0,
+          "dram_accesses": 0
+        }
+      }
+    }
+  ]
+}

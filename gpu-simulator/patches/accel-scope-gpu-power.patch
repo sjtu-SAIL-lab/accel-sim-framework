@@ -1,0 +1,112 @@
+diff --git a/src/accelwattch/gpgpu_sim_wrapper.cc b/src/accelwattch/gpgpu_sim_wrapper.cc
+--- a/src/accelwattch/gpgpu_sim_wrapper.cc
++++ b/src/accelwattch/gpgpu_sim_wrapper.cc
+@@ -571,6 +571,17 @@ void gpgpu_sim_wrapper::power_metrics_calculations() {
+           : gpu_tot_power.min;
+ }
+ 
++double gpgpu_sim_wrapper::get_kernel_avg_power() const {
++  return kernel_sample_count > 0 ? kernel_power.avg : 0.0;
++}
++
++double gpgpu_sim_wrapper::get_kernel_avg_replaceable_memory_power() const {
++  if (kernel_sample_count <= 0) return 0.0;
++  return (kernel_cmp_pwr[DCP].avg + kernel_cmp_pwr[L2CP].avg +
++          kernel_cmp_pwr[DRAMP].avg) /
++         kernel_sample_count;
++}
++
+ void gpgpu_sim_wrapper::print_trace_files() {
+   open_files();
+ 
+diff --git a/src/accelwattch/gpgpu_sim_wrapper.h b/src/accelwattch/gpgpu_sim_wrapper.h
+--- a/src/accelwattch/gpgpu_sim_wrapper.h
++++ b/src/accelwattch/gpgpu_sim_wrapper.h
+@@ -111,6 +111,8 @@ class gpgpu_sim_wrapper {
+                                 const std::string& kernel_info_string,
+                                 bool print_trace);
+   void power_metrics_calculations();
++  double get_kernel_avg_power() const;
++  double get_kernel_avg_replaceable_memory_power() const;
+   void set_model_voltage(double model_voltage);
+   void set_inst_power(bool clk_gated_lanes, double tot_cycles,
+                       double busy_cycles, double tot_inst, double int_inst,
+diff --git a/src/gpgpu-sim/gpu-sim.cc b/src/gpgpu-sim/gpu-sim.cc
+--- a/src/gpgpu-sim/gpu-sim.cc
++++ b/src/gpgpu-sim/gpu-sim.cc
+@@ -297,6 +297,10 @@ void memory_config::reg_options(class OptionParser *opp) {
+   option_parser_register(opp, "-accel_scope_noncache_power_mw", OPT_DOUBLE,
+                          &accel_scope_noncache_power_mw,
+                          "fixed non-cache processor power in mW", "0");
++  option_parser_register(
++      opp, "-accel_scope_gpu_nonstorage_scale", OPT_DOUBLE,
++      &accel_scope_gpu_nonstorage_scale,
++      "scale AccelWattch non-storage power for the target GPU", "1.0");
+   option_parser_register(opp, "-gpgpu_cache:dl2_texture_only", OPT_BOOL,
+                          &m_L2_texure_only, "L2 cache used for texture only",
+                          "1");
+@@ -1529,5 +1529,7 @@ void gpgpu_sim::print_stats() {
+   shader_print_scheduler_stat(stdout, false);
+ 
+   m_shader_stats->print(stdout);
++  double accelwattch_gpu_power_mw = 0.0;
++  double accelwattch_replaceable_memory_power_mw = 0.0;
+ #ifdef GPGPUSIM_POWER_MODEL
+   if (m_config.g_power_simulation_enabled) {
+@@ -1547,5 +1549,10 @@ void gpgpu_sim::print_stats() {
+     m_gpgpusim_wrapper->print_power_kernel_stats(
+         gpu_sim_cycle, gpu_tot_sim_cycle, gpu_tot_sim_insn + gpu_sim_insn,
+         kernel_info_str, true);
++    accelwattch_gpu_power_mw =
++        1000.0 * m_gpgpusim_wrapper->get_kernel_avg_power();
++    accelwattch_replaceable_memory_power_mw =
++        1000.0 *
++        m_gpgpusim_wrapper->get_kernel_avg_replaceable_memory_power();
+     // if(!m_config.g_aggregate_power_stats)
+     mcpat_reset_perf_count(m_gpgpusim_wrapper);
+@@ -1704,7 +1711,17 @@ void gpgpu_sim::print_stats() {
+     double dynamic_power_mw =
+         latency_ns > 0.0 ? dynamic_energy_pj / latency_ns : 0.0;
+     double hierarchy_power_mw = static_power_mw + dynamic_power_mw;
+-    double operator_power_mw =
+-        m_memory_config->accel_scope_noncache_power_mw + hierarchy_power_mw;
++    double gpu_nonstorage_power_mw =
++        accelwattch_gpu_power_mw - accelwattch_replaceable_memory_power_mw;
++    if (gpu_nonstorage_power_mw < 0.0) gpu_nonstorage_power_mw = 0.0;
++    gpu_nonstorage_power_mw *=
++        m_memory_config->accel_scope_gpu_nonstorage_scale;
++    gpu_nonstorage_power_mw +=
++        m_memory_config->accel_scope_noncache_power_mw;
++    double gpu_power_mw = accelwattch_gpu_power_mw > 0.0
++                              ? gpu_nonstorage_power_mw + hierarchy_power_mw
++                              : 0.0;
++    double operator_power_mw =
++        gpu_power_mw > 0.0 ? gpu_power_mw : hierarchy_power_mw;
+     double operator_energy_nj =
+         latency_ns * operator_power_mw / 1000.0;
+@@ -1717,11 +1734,13 @@ void gpgpu_sim::print_stats() {
+     printf("ACCEL_SCOPE_OPERATOR operator=\"%s\" latency_cycles=%llu "
+            "latency_ns=%.6f operator_power_mw=%.6f "
++           "gpu_power_mw=%.6f gpu_nonstorage_power_mw=%.6f "
+            "hierarchy_power_mw=%.6f operator_energy_nj=%.6f "
+            "l1_accesses=%llu l1_hit_rate=%.6f l2_accesses=%llu "
+            "l2_hit_rate=%.6f l3_accesses=%llu l3_hit_rate=%.6f "
+            "dram_accesses=%llu\n",
+            executed_kernel_name().c_str(), gpu_sim_cycle, latency_ns,
+-           operator_power_mw, hierarchy_power_mw, operator_energy_nj,
++           operator_power_mw, gpu_power_mw, gpu_nonstorage_power_mw,
++           hierarchy_power_mw, operator_energy_nj,
+            l1_accesses, l1_hit_rate, l2_accesses, l2_hit_rate, l3_accesses,
+            l3_hit_rate, dram_delta);
+   }
+diff --git a/src/gpgpu-sim/gpu-sim.h b/src/gpgpu-sim/gpu-sim.h
+--- a/src/gpgpu-sim/gpu-sim.h
++++ b/src/gpgpu-sim/gpu-sim.h
+@@ -297,6 +297,7 @@ class memory_config {
+   double accel_scope_l2_static_power_mw;
+   double accel_scope_l3_static_power_mw;
+   double accel_scope_noncache_power_mw;
++  double accel_scope_gpu_nonstorage_scale;
+ 
+   char *gpgpu_dram_timing_opt;
+   char *gpgpu_L2_queue_config;

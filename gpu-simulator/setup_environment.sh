@@ -33,6 +33,11 @@ export ACCELSIM_ROOT="$( cd "$( dirname "$BASH_SOURCE" )" && pwd )"
 #       Ideally, when we release, it should be based off a GPGPU-Sim release.
 export GPGPUSIM_REPO="${GPGPUSIM_REPO:=https://github.com/sun-lingyu/gpgpu-sim_distribution.git}"
 export GPGPUSIM_BRANCH="${GPGPUSIM_BRANCH:=dev}"
+export GPGPUSIM_COMMIT="${GPGPUSIM_COMMIT:=09c0fea40c0afb3c44c3eb44198270901e3ead72}"
+
+gpgpu_git() {
+    (cd "$ACCELSIM_ROOT/gpgpu-sim" && git "$@")
+}
 
 if [ $# = '1' ] ;
 then
@@ -59,14 +64,35 @@ if [ -z "$GPGPUSIM_SETUP_ENVIRONMENT_WAS_RUN" -o ! -d "$GPGPUSIM_ROOT" ]; then
         if [ -z $user_branch ] ; then
             user_branch=$GPGPUSIM_BRANCH
         fi
-        git clone $user_repo $ACCELSIM_ROOT/gpgpu-sim
-        git -C $ACCELSIM_ROOT/gpgpu-sim/ checkout $user_branch
+        git clone "$user_repo" "$ACCELSIM_ROOT/gpgpu-sim"
+        gpgpu_git checkout "$user_branch"
+        gpgpu_git checkout "$GPGPUSIM_COMMIT"
     else
         echo "Found $ACCELSIM_ROOT/gpgpu-sim, using existing local location. Not sycning anything."
     fi
-    source $ACCELSIM_ROOT/gpgpu-sim/setup_environment $ACCELSIM_CONFIG || return 1
+    accel_scope_base_patch="$ACCELSIM_ROOT/patches/accel-scope-gpgpu-sim.patch"
+    accel_scope_power_patch="$ACCELSIM_ROOT/patches/accel-scope-gpu-power.patch"
+    if [ -f "$accel_scope_power_patch" ] && \
+       gpgpu_git apply --reverse --check "$accel_scope_power_patch" 2>/dev/null; then
+        echo "Accel-SCOPE GPGPU-Sim patches are already applied."
+    else
+        for accel_scope_patch in "$accel_scope_base_patch" "$accel_scope_power_patch"; do
+            if [ -f "$accel_scope_patch" ]; then
+                if gpgpu_git apply --check "$accel_scope_patch" 2>/dev/null; then
+                    gpgpu_git apply "$accel_scope_patch" || return 1
+                    echo "Applied $(basename "$accel_scope_patch")."
+                elif gpgpu_git apply --reverse --check "$accel_scope_patch" 2>/dev/null; then
+                    echo "$(basename "$accel_scope_patch") is already applied."
+                else
+                    echo "ERROR: $(basename "$accel_scope_patch") does not match the local GPGPU-Sim tree." >&2
+                    return 1
+                fi
+            fi
+        done
+    fi
+    source "$ACCELSIM_ROOT/gpgpu-sim/setup_environment" "$ACCELSIM_CONFIG" || return 1
 else
-    source $GPGPUSIM_ROOT/setup_environment $ACCELSIM_CONFIG || return 1
+    source "$GPGPUSIM_ROOT/setup_environment" "$ACCELSIM_CONFIG" || return 1
 fi
 
 if [ ! -d "$ACCELSIM_ROOT/extern/pybind11" ] ; then
